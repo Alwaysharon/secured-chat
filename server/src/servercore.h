@@ -47,6 +47,10 @@ public:
 
     void processReadMessage(QSslSocket *socket, const QString &message);
 
+    QString generateSalt(int length = 16);
+    
+    QString hashPasswordWithSalt(const QString &password, const QString &salt);
+
 private slots:
     void onReceiveMessage(QSslSocket *socket, const QString &message);
 

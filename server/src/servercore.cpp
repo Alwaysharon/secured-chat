@@ -1,4 +1,6 @@
 #include "servercore.h"
+#include <openssl/evp.h>  
+#include <QRandomGenerator>
 
 bool ServerCore::createServer(const QHostAddress &address, quint16 port, const QString &rootUserName, const QString &password) {
     // 获取当前工作目录
@@ -100,7 +102,8 @@ bool ServerCore::createDatabase(const QString &rootUserName, const QString &pass
         "CREATE TABLE IF NOT EXISTS user ("
         "u_id    INT PRIMARY KEY,"              // user id
         "u_name  VARCHAR(20) UNIQUE NOT NULL,"  // user name
-        "pw      VARCHAR(20) NOT NULL,"         // password
+        "pw      VARCHAR(64) NOT NULL,"         // 64位SM3十六进制串
+        "salt    VARCHAR(64) NOT NULL,"         // 盐
         "su_t    DATETIME,"                     // sign up time
         "sd_t    DATETIME,"                     // sign down time
         "role    VARCHAR(5) NOT NULL);"         // user role ('root', 'admin', 'user')
@@ -178,7 +181,7 @@ bool ServerCore::createDatabase(const QString &rootUserName, const QString &pass
         "CREATE TRIGGER IF NOT EXISTS check_pw_length "
         "BEFORE INSERT ON user "
         "FOR EACH ROW "
-        "WHEN LENGTH(NEW.pw) < 6 OR LENGTH(NEW.pw) > 20 "
+        "WHEN LENGTH(NEW.pw) < 64 OR LENGTH(NEW.pw) > 64 "
         "BEGIN "
         "   SELECT RAISE(FAIL, 'pw must be between 6 and 20 characters'); "
         "END; "
@@ -311,18 +314,19 @@ bool ServerCore::createDatabase(const QString &rootUserName, const QString &pass
         qDebug() << "超级管理员账号创建成功!";
     } else {
         // 若存在超级管理员，验证密码是否正确
-        query.exec(QString("SELECT u_id FROM user WHERE u_name='%1' AND pw='%2' AND role='root';")
-            .arg(rootUserName)
-            .arg(password));
-        if (query.lastError().isValid()) {
-            qDebug() << query.lastError();
-            return false;
-        }
+       query.exec(QString("SELECT u_id, pw, salt FROM user WHERE u_name='%1' AND role='root';").arg(rootUserName));
         if (!query.next()) {
-            qDebug() << "超级管理员创建失败或账号密码错误!";
+            qDebug() << "超级管理员不存在!";
             return false;
         }
-        adminUserID = query.value(0).toInt();    // 设置当前管理员用户ID
+        QString dbHash = query.value(1).toString();
+        QString salt = query.value(2).toString();
+        QString inputHash = hashPasswordWithSalt(password, salt);
+        if (dbHash != inputHash) {
+            qDebug() << "超级管理员密码错误!";
+            return false;
+        }
+        adminUserID = query.value(0).toInt(); // 设置当前管理员用户ID
     }
 
     adminUserName = rootUserName;           // 设置当前管理员用户名
@@ -333,10 +337,11 @@ bool ServerCore::createDatabase(const QString &rootUserName, const QString &pass
     userTableModel->select(); // 执行查询以加载数据
     userTableModel->setHeaderData(0, Qt::Horizontal, "用户ID");
     userTableModel->setHeaderData(1, Qt::Horizontal, "用户名");
-    userTableModel->setHeaderData(2, Qt::Horizontal, "密码");
-    userTableModel->setHeaderData(3, Qt::Horizontal, "注册时间");
-    userTableModel->setHeaderData(4, Qt::Horizontal, "注销时间");
-    userTableModel->setHeaderData(5, Qt::Horizontal, "用户角色");
+    userTableModel->setHeaderData(2, Qt::Horizontal, "哈希值");  // pw
+    userTableModel->setHeaderData(3, Qt::Horizontal, "盐");      // salt
+    userTableModel->setHeaderData(4, Qt::Horizontal, "注册时间");
+    userTableModel->setHeaderData(5, Qt::Horizontal, "注销时间");
+    userTableModel->setHeaderData(6, Qt::Horizontal, "用户角色");
 
     chatTableModel = new QSqlTableModel;
     chatTableModel->setTable("chatroom"); // 替换为你的表名
@@ -365,18 +370,21 @@ bool ServerCore::registerAccount(const QString &userName, const QString &passwor
     }
 
     // 插入新用户
-    QString sql_statement =
-            "INSERT INTO user (u_id, u_name, pw, su_t, sd_t, role) VALUES " +
-            QString("(%1,'%2','%3','%4',%5, '%6');")
-            .arg(++maxUserNumber)
-            .arg(userName)
-            .arg(password)
-            .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"))
-            .arg("NULL")
-            .arg(role);
+    QString salt = generateSalt();
+    QString hash = hashPasswordWithSalt(password, salt);
+    QString sql = QString(
+        "INSERT INTO user (u_id, u_name, pw, salt, su_t, sd_t, role) "
+        "VALUES (%1,'%2','%3','%4','%5',%6, '%7');")
+        .arg(++maxUserNumber)
+        .arg(userName)
+        .arg(hash)
+        .arg(salt)
+        .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss"))
+        .arg("NULL")
+        .arg(role);
 
     // 执行SQL语句
-    query.exec(sql_statement);
+    query.exec(sql);
     if (query.lastError().isValid()) {
         --maxUserNumber;
         qDebug() << query.lastError();
@@ -406,16 +414,31 @@ bool ServerCore::loginAccount(QSslSocket *socket, const QString &userName, const
     }
 
     // 检查密码是否正确
-    query.exec(QString("SELECT pw FROM user WHERE u_name = '%1';").arg(userName));
-    if (query.lastError().isValid()) {
-        qDebug() << query.lastError();
+    // query.exec(QString("SELECT pw FROM user WHERE u_name = '%1';").arg(userName));
+    // if (query.lastError().isValid()) {
+    //     qDebug() << query.lastError();
+    //     return false;
+    // }
+    // query.next();
+    // if (query.value(0).toString() != password) {
+    //     qDebug() << "密码错误!";
+    //     return false;
+    // }
+    query.exec(QString("SELECT pw, salt FROM user WHERE u_name = '%1' AND sd_t IS NULL;").arg(userName));
+    if (!query.next()) {
+        qDebug() << "用户名不存在!";
         return false;
     }
-    query.next();
-    if (query.value(0).toString() != password) {
+
+    QString dbHash = query.value(0).toString();
+    QString salt = query.value(1).toString();
+    QString inputHash = hashPasswordWithSalt(password, salt);
+
+    if (inputHash != dbHash) {
         qDebug() << "密码错误!";
         return false;
     }
+
 
     // 该账号与该连接绑定
     userSocketMap.insert(userName, socket);
@@ -951,4 +974,58 @@ void ServerCore::sendJsonObj(QSslSocket *socket, const QJsonObject &jsonObj) {
 //    qDebug() << "发送报文到ip地址和端口" << socket->peerAddress().toString() << socket->peerPort();
 //    qDebug() << socket->write(message.toUtf8());
     server.sendMessage(socket, message);
+}
+QString ServerCore::generateSalt(int length) {
+    const QString chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    QString salt;
+    for (int i = 0; i < length; ++i) {
+        salt += chars.at(QRandomGenerator::global()->bounded(chars.size()));
+    }
+    return salt;
+}
+
+QString ServerCore::hashPasswordWithSalt(const QString &password, const QString &salt) {
+    QByteArray data = (salt + password).toUtf8();
+
+    // 1. 创建并初始化 EVP_MD_CTX
+    EVP_MD_CTX *ctx = EVP_MD_CTX_new();
+    if (!ctx) {
+        qDebug() << "EVP_MD_CTX_new() 失败";
+        return QString();
+    }
+
+    // 2. 从默认 provider 中获取 “SM3” 算法对象
+    const EVP_MD *md = EVP_MD_fetch(NULL, "SM3", NULL);
+    if (!md) {
+        qDebug() << "EVP_MD_fetch(\"SM3\") 拿不到 SM3，请检查 OpenSSL 是否支持 SM3";
+        EVP_MD_CTX_free(ctx);
+        return QString();
+    }
+
+    // 3. 初始化摘要计算
+    if (EVP_DigestInit_ex(ctx, md, NULL) != 1) {
+        qDebug() << "EVP_DigestInit_ex 失败";
+        EVP_MD_CTX_free(ctx);
+        return QString();
+    }
+
+    // 4. 填充数据
+    if (EVP_DigestUpdate(ctx, data.constData(), data.size()) != 1) {
+        qDebug() << "EVP_DigestUpdate 失败";
+        EVP_MD_CTX_free(ctx);
+        return QString();
+    }
+
+    // 5. 完成计算并获取结果
+    unsigned char digest[EVP_MAX_MD_SIZE];
+    unsigned int outlen = 0;
+    if (EVP_DigestFinal_ex(ctx, digest, &outlen) != 1) {
+        qDebug() << "EVP_DigestFinal_ex 失败";
+        EVP_MD_CTX_free(ctx);
+        return QString();
+    }
+    EVP_MD_CTX_free(ctx);
+
+    // outlen 应该是 32（SM3 输出长度），我们把前 outlen 字节转成十六进制串返回
+    return QByteArray((const char*)digest, outlen).toHex();
 }
