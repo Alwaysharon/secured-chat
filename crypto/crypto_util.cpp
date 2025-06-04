@@ -8,6 +8,9 @@
 #include <openssl/evp.h>
 #include <openssl/pem.h>
 #include <openssl/err.h>
+#include <QDateTime>
+#include <QFile>
+#include <QTextStream>
 
 QByteArray generate_random_sm4_key() {
     QByteArray key(16, Qt::Uninitialized);
@@ -167,4 +170,16 @@ QByteArray sm2_decrypt_no_pass(const QString &privKeyPath, const QByteArray &cip
     EVP_PKEY_CTX_free(ctx);
     EVP_PKEY_free(pkey);
     return plaintext;
+}
+void logAudit(const QString &eventType, const QString &username, const QString &details) {
+    QFile file("audit.log");  // 日志文件放在服务器当前目录
+    if (file.open(QIODevice::Append | QIODevice::Text)) {
+        QTextStream out(&file);
+        QString logEntry = QString("[%1] 用户: %2 | 类型: %3 | 详情: %4\n")
+            .arg(QDateTime::currentDateTime().toString("yyyy-MM-dd HH:mm:ss"))
+            .arg(username)
+            .arg(eventType)
+            .arg(details);
+        out << logEntry;
+    }
 }

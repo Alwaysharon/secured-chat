@@ -4,6 +4,8 @@
 #include <QByteArray>
 #include <QString>
 
+void logAudit(const QString &user, const QString &action, const QString &detail);
+
 QByteArray sm2_decrypt_no_pass(const QString &privKeyPath, const QByteArray &cipherText);
 
 QByteArray generate_random_key(); 

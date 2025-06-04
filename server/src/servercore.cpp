@@ -3,6 +3,7 @@
 #include <QRandomGenerator>
 #include "../../crypto/crypto_util.h"
 
+
 bool ServerCore::createServer(const QHostAddress &address, quint16 port, const QString &rootUserName, const QString &password) {
     // 获取当前工作目录
     QString currentDir = QDir::currentPath();
@@ -754,9 +755,7 @@ bool ServerCore::synchronizationRemind(const QString &chatName, const QString &s
 }
 
 void ServerCore::processReadMessage(QSslSocket *socket, const QString &message) {
-    // 解析JSON字符串
     QJsonDocument jsonDoc = QJsonDocument::fromJson(message.toUtf8());
-
     if (jsonDoc.isNull() || !jsonDoc.isObject()) {
         qDebug() << "数据报文解析失败!";
         return;
@@ -783,105 +782,112 @@ void ServerCore::processReadMessage(QSslSocket *socket, const QString &message) 
             return;
         }
     } else if (type == "register") {
-        if (registerAccount(dataObj["userName"].toString(), dataObj["password"].toString(), dataObj["role"].toString())) {
+        QString user = dataObj["userName"].toString();
+        if (registerAccount(user, dataObj["password"].toString(), dataObj["role"].toString())) {
             qDebug() << "新账号注册成功";
+            logAudit("register", user, "新账号注册成功");
+
             QJsonObject resJsonObj = baseJsonObj(type, "success");
-
-            // 编辑数据字段
             QJsonObject resDataObj = resJsonObj["data"].toObject();
-            resDataObj["userName"] = dataObj["userName"].toString();
+            resDataObj["userName"] = user;
             resJsonObj["data"] = resDataObj;
-
             sendJsonObj(socket, resJsonObj);
         } else {
             qDebug() << "新账号注册失败";
+            logAudit("register_failed", user, "注册失败");
             QJsonObject resJsonObj = baseJsonObj(type, "failed");
             sendJsonObj(socket, resJsonObj);
             return;
         }
     } else if (type == "login") {
-        if (loginAccount(socket, dataObj["userName"].toString(), dataObj["password"].toString())) {
+        QString user = dataObj["userName"].toString();
+        if (loginAccount(socket, user, dataObj["password"].toString())) {
             qDebug() << "用户登录成功";
+            logAudit("login", user, "登录成功");
+
             QJsonObject resJsonObj = baseJsonObj(type, "success");
-
-            // 编辑数据字段
             QJsonObject resDataObj = resJsonObj["data"].toObject();
-            resDataObj["userName"] = dataObj["userName"].toString();
+            resDataObj["userName"] = user;
             resJsonObj["data"] = resDataObj;
-
             sendJsonObj(socket, resJsonObj);
-        }else {
+        } else {
             qDebug() << "用户登录失败";
+            logAudit("login_failed", user, "登录失败");
             QJsonObject resJsonObj = baseJsonObj(type, "failed");
             sendJsonObj(socket, resJsonObj);
             return;
         }
     } else if (type == "createChatroom") {
-        if (createChatroom(dataObj["chatName"].toString(), dataObj["creatorName"].toString())) {
+        QString creator = dataObj["creatorName"].toString();
+        QString chatroom = dataObj["chatName"].toString();
+        if (createChatroom(chatroom, creator)) {
             qDebug() << "创建聊天室成功";
+            logAudit("createChatroom", creator, "创建聊天室 " + chatroom);
+
             QJsonObject resJsonObj = baseJsonObj(type, "success");
-
-            // 编辑数据字段
             QJsonObject resDataObj = resJsonObj["data"].toObject();
-            resDataObj["chatName"] = dataObj["chatName"].toString();
+            resDataObj["chatName"] = chatroom;
             resJsonObj["data"] = resDataObj;
-
             sendJsonObj(socket, resJsonObj);
         } else {
             qDebug() << "创建聊天室失败";
+            logAudit("createChatroom_failed", creator, "聊天室名: " + chatroom);
             QJsonObject resJsonObj = baseJsonObj(type, "failed");
             sendJsonObj(socket, resJsonObj);
             return;
         }
     } else if (type == "joinChatroom") {
-        if (joinChatroom(dataObj["chatName"].toString(), dataObj["userName"].toString())) {
+        QString user = dataObj["userName"].toString();
+        QString chatroom = dataObj["chatName"].toString();
+        if (joinChatroom(chatroom, user)) {
             qDebug() << "加入聊天室成功";
+            logAudit("joinChatroom", user, "加入聊天室 " + chatroom);
+
             QJsonObject resJsonObj = baseJsonObj(type, "success");
-
-            // 编辑数据字段
             QJsonObject resDataObj = resJsonObj["data"].toObject();
-            resDataObj["chatName"] = dataObj["chatName"].toString();
-            resDataObj["userName"] = dataObj["userName"].toString();
+            resDataObj["chatName"] = chatroom;
+            resDataObj["userName"] = user;
             resJsonObj["data"] = resDataObj;
-
             sendJsonObj(socket, resJsonObj);
         } else {
             qDebug() << "加入聊天室失败";
+            logAudit("joinChatroom_failed", user, "聊天室名: " + chatroom);
             QJsonObject resJsonObj = baseJsonObj(type, "failed");
             sendJsonObj(socket, resJsonObj);
             return;
         }
     } else if (type == "getChatList") {
-        QJsonArray joinedChatList = getJoinedChatList(dataObj["userName"].toString());
-        QJsonArray unjoinedChatList = getUnjoinedChatList(dataObj["userName"].toString());
+        QString user = dataObj["userName"].toString();
+        QJsonArray joinedChatList = getJoinedChatList(user);
+        QJsonArray unjoinedChatList = getUnjoinedChatList(user);
 
         qDebug() << "获取用户可访问的聊天室列表成功";
         QJsonObject resJsonObj = baseJsonObj(type, "success");
 
-        // 编辑数据字段
         QJsonObject resDataObj = resJsonObj["data"].toObject();
-        resDataObj["userName"] = dataObj["userName"].toString();
+        resDataObj["userName"] = user;
         resDataObj["joinedChatList"] = joinedChatList;
         resDataObj["unjoinedChatList"] = unjoinedChatList;
         resJsonObj["data"] = resDataObj;
 
         sendJsonObj(socket, resJsonObj);
     } else if (type == "getChatUserList") {
-        QJsonArray chatUserList = getChatUserList(dataObj["chatName"].toString());
+        QString chatroom = dataObj["chatName"].toString();
+        QJsonArray chatUserList = getChatUserList(chatroom);
 
         qDebug() << "获取聊天室用户列表成功";
         QJsonObject resJsonObj = baseJsonObj(type, "success");
 
-        // 编辑数据字段
         QJsonObject resDataObj = resJsonObj["data"].toObject();
-        resDataObj["chatName"] = dataObj["chatName"].toString();
+        resDataObj["chatName"] = chatroom;
         resDataObj["chatUserList"] = chatUserList;
         resJsonObj["data"] = resDataObj;
 
         sendJsonObj(socket, resJsonObj);
     } else if (type == "getMessage") {
+        QString chatroom = dataObj["chatName"].toString();
         QJsonArray messageList = getMessage(
-            dataObj["chatName"].toString(),
+            chatroom,
             dataObj["latestMessageID"].toInt(),
             dataObj["lastTime"].toString()
         );
@@ -889,9 +895,8 @@ void ServerCore::processReadMessage(QSslSocket *socket, const QString &message) 
         qDebug() << "获取聊天室消息成功";
         QJsonObject resJsonObj = baseJsonObj(type, "success");
 
-        // 编辑数据字段
         QJsonObject resDataObj = resJsonObj["data"].toObject();
-        resDataObj["chatName"] = dataObj["chatName"].toString();
+        resDataObj["chatName"] = chatroom;
         resDataObj["latestMessageID"] = dataObj["latestMessageID"].toInt();
         resDataObj["lastTime"] = dataObj["lastTime"].toString();
         resDataObj["messageList"] = messageList;
@@ -900,45 +905,46 @@ void ServerCore::processReadMessage(QSslSocket *socket, const QString &message) 
         sendJsonObj(socket, resJsonObj);
         qDebug() << "已发送聊天室消息到ip地址和端口" << socket->peerAddress().toString() << socket->peerPort();
     } else if (type == "sendMessage") {
-    QString chatName = dataObj["chatName"].toString();
-    QString senderName = dataObj["senderName"].toString();
+        QString chatName = dataObj["chatName"].toString();
+        QString senderName = dataObj["senderName"].toString();
 
-    QByteArray encKey = QByteArray::fromBase64(dataObj["encKey"].toString().toUtf8());
-    QByteArray cipherText = QByteArray::fromBase64(dataObj["cipherText"].toString().toUtf8());
+        QByteArray encKey = QByteArray::fromBase64(dataObj["encKey"].toString().toUtf8());
+        QByteArray cipherText = QByteArray::fromBase64(dataObj["cipherText"].toString().toUtf8());
 
-    QByteArray sm4_key = sm2_decrypt_no_pass("server_priv_nopass.pem", encKey);
-    if (sm4_key.isEmpty()) {
-        qDebug() << "SM2 解密失败";
-        return;
+        QByteArray sm4_key = sm2_decrypt_no_pass("server_priv_nopass.pem", encKey);
+        if (sm4_key.isEmpty()) {
+            qDebug() << "SM2 解密失败";
+            return;
+        }
+
+        QByteArray plainText;
+        if (!sm4_decrypt(sm4_key, cipherText, plainText)) {
+            qDebug() << "SM4 解密失败";
+            return;
+        }
+
+        qDebug() << "解密后的消息：" << plainText;
+
+        if (sendMessage(chatName, senderName, QString::fromUtf8(plainText))) {
+            qDebug() << "发送消息成功";
+            logAudit("sendMessage", senderName, "发送消息到聊天室 " + chatName);
+
+            QJsonObject resJsonObj = baseJsonObj(type, "success");
+            QJsonObject resDataObj = resJsonObj["data"].toObject();
+            resDataObj["chatName"] = chatName;
+            resDataObj["senderName"] = senderName;
+            resDataObj["message"] = QString::fromUtf8(plainText);
+            resJsonObj["data"] = resDataObj;
+            sendJsonObj(socket, resJsonObj);
+        } else {
+            qDebug() << "发送消息失败";
+            logAudit("sendMessage_failed", senderName, "发送失败 - 聊天室 " + chatName);
+            QJsonObject resJsonObj = baseJsonObj(type, "failed");
+            sendJsonObj(socket, resJsonObj);
+        }
     }
+}
 
-
-    QByteArray plainText;
-    if (!sm4_decrypt(sm4_key, cipherText, plainText)) {
-        qDebug() << "SM4 解密失败";
-        return;
-    }
-
-    qDebug() << "解密后的消息：" << plainText;
-
-    if (sendMessage(chatName, senderName, QString::fromUtf8(plainText))) {
-        qDebug() << "发送消息成功";
-        QJsonObject resJsonObj = baseJsonObj(type, "success");
-
-        QJsonObject resDataObj = resJsonObj["data"].toObject();
-        resDataObj["chatName"] = chatName;
-        resDataObj["senderName"] = senderName;
-        resDataObj["message"] = QString::fromUtf8(plainText);
-        resJsonObj["data"] = resDataObj;
-
-        sendJsonObj(socket, resJsonObj);
-    } else {
-        qDebug() << "发送消息失败";
-        QJsonObject resJsonObj = baseJsonObj(type, "failed");
-        sendJsonObj(socket, resJsonObj);
-      }
-    }
-}  
 
 void ServerCore::onReceiveMessage(QSslSocket *socket, const QString &message) {
     // 如果包含多个报文，需要分割
