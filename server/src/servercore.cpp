@@ -1,6 +1,7 @@
 #include "servercore.h"
 #include <openssl/evp.h>  
 #include <QRandomGenerator>
+#include "../../crypto/crypto_util.h"
 
 bool ServerCore::createServer(const QHostAddress &address, quint16 port, const QString &rootUserName, const QString &password) {
     // 获取当前工作目录
@@ -899,29 +900,45 @@ void ServerCore::processReadMessage(QSslSocket *socket, const QString &message) 
         sendJsonObj(socket, resJsonObj);
         qDebug() << "已发送聊天室消息到ip地址和端口" << socket->peerAddress().toString() << socket->peerPort();
     } else if (type == "sendMessage") {
-        if (sendMessage(dataObj["chatName"].toString(), dataObj["senderName"].toString(), dataObj["message"].toString())) {
-            qDebug() << "发送消息成功";
-            QJsonObject resJsonObj = baseJsonObj(type, "success");
+    QString chatName = dataObj["chatName"].toString();
+    QString senderName = dataObj["senderName"].toString();
 
-            // 编辑数据字段
-            QJsonObject resDataObj = resJsonObj["data"].toObject();
-            resDataObj["chatName"] = dataObj["chatName"].toString();
-            resDataObj["senderName"] = dataObj["senderName"].toString();
-            resDataObj["message"] = dataObj["message"].toString();
-            resJsonObj["data"] = resDataObj;
+    QByteArray encKey = QByteArray::fromBase64(dataObj["encKey"].toString().toUtf8());
+    QByteArray cipherText = QByteArray::fromBase64(dataObj["cipherText"].toString().toUtf8());
 
-            sendJsonObj(socket, resJsonObj);
-        } else {
-            qDebug() << "发送消息失败";
-            QJsonObject resJsonObj = baseJsonObj(type, "failed");
-            sendJsonObj(socket, resJsonObj);
-            return;
-        }
-    } else {
-        qDebug() << "数据报文类型不正确!";
+    QByteArray sm4_key = sm2_decrypt_no_pass("server_priv_nopass.pem", encKey);
+    if (sm4_key.isEmpty()) {
+        qDebug() << "SM2 解密失败";
         return;
     }
-}
+
+
+    QByteArray plainText;
+    if (!sm4_decrypt(sm4_key, cipherText, plainText)) {
+        qDebug() << "SM4 解密失败";
+        return;
+    }
+
+    qDebug() << "解密后的消息：" << plainText;
+
+    if (sendMessage(chatName, senderName, QString::fromUtf8(plainText))) {
+        qDebug() << "发送消息成功";
+        QJsonObject resJsonObj = baseJsonObj(type, "success");
+
+        QJsonObject resDataObj = resJsonObj["data"].toObject();
+        resDataObj["chatName"] = chatName;
+        resDataObj["senderName"] = senderName;
+        resDataObj["message"] = QString::fromUtf8(plainText);
+        resJsonObj["data"] = resDataObj;
+
+        sendJsonObj(socket, resJsonObj);
+    } else {
+        qDebug() << "发送消息失败";
+        QJsonObject resJsonObj = baseJsonObj(type, "failed");
+        sendJsonObj(socket, resJsonObj);
+      }
+    }
+}  
 
 void ServerCore::onReceiveMessage(QSslSocket *socket, const QString &message) {
     // 如果包含多个报文，需要分割

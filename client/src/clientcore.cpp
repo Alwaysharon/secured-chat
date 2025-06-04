@@ -1,5 +1,9 @@
 #include "chat.h"
 #include "clientcore.h"
+#include "sm2_util.h"
+#include <QByteArray>
+#include "crypto_util.h"
+
 
 bool ClientCore::connectServer(const QHostAddress &address, const quint16 &port) {
     // 检查格式是否正确
@@ -392,48 +396,48 @@ QJsonArray ClientCore::getMessageRequest(const QString &chatName, const int late
 }
 
 bool ClientCore::sendMessageRequest(const QString &chatName, const QString &senderName, const QString &message) {
-    QJsonObject jsonObj = baseJsonObj("sendMessage", "request");
+    // 1. 生成随机 SM4 密钥
+    QByteArray sm4_key = generate_random_key();  // 16字节
 
-    // 编辑数据字段
-    QJsonObject dataObj = jsonObj["data"].toObject();
+    // 2. 使用 SM4 加密消息
+    QByteArray cipherText;
+    if (!sm4_encrypt(sm4_key, message.toUtf8(), cipherText)) {
+        qDebug() << "SM4 加密失败";
+        return false;
+    }
+
+    // 3. 使用 SM2 公钥加密 SM4 密钥
+    QByteArray encKey;
+    if (!sm2_encrypt("server_pub.pem", sm4_key, encKey)) {
+        qDebug() << "SM2 加密失败";
+        return false;
+    }
+
+    // 4. 构造加密传输 JSON 报文
+    QJsonObject jsonObj = baseJsonObj("sendMessage", "request");
+    QJsonObject dataObj;
     dataObj["chatName"] = chatName;
     dataObj["senderName"] = senderName;
-    dataObj["message"] = message;
+    dataObj["encKey"] = QString::fromUtf8(encKey.toBase64());
+    dataObj["cipherText"] = QString::fromUtf8(cipherText.toBase64());
     jsonObj["data"] = dataObj;
 
     QString response;
-
-    // 等待数据接收
     if (sendAndWait(response, jsonObj)) {
-        if (!checkMessage(response, jsonObj["type"].toString(), "success")) {
-            return false;
-        }
-
-        QJsonDocument resJsonDoc = QJsonDocument::fromJson(response.toUtf8());
-        QJsonObject resJsonObj = resJsonDoc.object();
-        QJsonObject resDataObj = resJsonObj["data"].toObject();
-
-        if (resDataObj["chatName"].toString() != chatName) {
-            qDebug() << "收到响应：聊天室名称不匹配";
-            return false;
-        }
-
-        qDebug() << "收到响应：发送消息成功";
-
-        return true;
-
+        return checkMessage(response, "sendMessage", "success");
     } else {
         qDebug() << "未能接收到服务端响应";
         return false;
     }
 }
 
+
 void ClientCore::processReadMessage(const QString &message) {
     qDebug() << "收到服务端消息：" << message;
 
     emit readMessage(message);
 
-    return; // TODO
+    // return; // ❌ 注释掉，否则下面逻辑永远不执行
 
     // 无聊天室打开时，不处理消息
     if (nameChatMap.isEmpty()) {
@@ -444,7 +448,7 @@ void ClientCore::processReadMessage(const QString &message) {
         return;
     }
 
-    QJsonDocument resJsonDoc = QJsonDocument::fromJson(message .toUtf8());
+    QJsonDocument resJsonDoc = QJsonDocument::fromJson(message.toUtf8());
     QJsonObject resJsonObj = resJsonDoc.object();
     QJsonObject resDataObj = resJsonObj["data"].toObject();
 
@@ -452,8 +456,9 @@ void ClientCore::processReadMessage(const QString &message) {
     QString chatName = resDataObj["chatName"].toString();
 
     // 被提醒，表示有新消息，需要更新消息列表
-//    nameChatMap[chatName]->refreshChat();
+    // nameChatMap[chatName]->refreshChat(); // 如果已实现，取消注释
 }
+
 
 void ClientCore::onReadyRead() {
     // 读取服务端的消息

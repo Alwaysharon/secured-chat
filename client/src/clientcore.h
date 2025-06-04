@@ -1,6 +1,5 @@
 #ifndef CLIENTCORE_H
 #define CLIENTCORE_H
-
 #include <QtNetwork>
 #include <QJsonObject>
 #include <QJsonDocument>

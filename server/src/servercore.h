@@ -5,6 +5,8 @@
 #include <QtSql>
 #include <QTableView>
 #include <QFileInfo>
+#include "crypto_util.h"
+#include "../../crypto/crypto_util.h"
 
 #include "server.h"
 
